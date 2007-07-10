@@ -1,0 +1,714 @@
+#!/usr/bin/perl -w # (C) Mika Kukkonen 2007. Licensed under GPLv2.
+use strict; # Bring it on!
+
+# Yeah, this is really a shell script, but I like Perl ;-)
+use Shell qw(cpio gzip mkisofs mktemp mount rm umount wget);
+
+# Some standard library routines:
+use Cwd;
+use File::Copy;
+use File::Path;
+use File::Find;
+
+# Command line options:
+use Getopt::Std;
+use vars qw($opt_b $opt_c $opt_d $opt_g $opt_h $opt_i $opt_l
+	    $opt_m $opt_n $opt_r $opt_s $opt_t $opt_u $opt_v);
+
+# Command line defaults, change these to your liking:
+$opt_d = "iso";
+$opt_i = "dvd_boot.iso";
+$opt_l = "iso.list";
+$opt_m = "/mnt";
+$opt_r = "dvd_root";
+$opt_s = "isolinux.cfg";
+$opt_t = "menu.lst";
+
+# Command line usage text:
+my $usage = "Usage:  '$0' with following optional arguments:
+	-b	  = Do not create the DVD-ISO image.
+	-c <user> = Do chown() <user> for all files if running as root.
+	-d <dir>  = Directory to download ISOs to, default './$opt_d'.
+	-g	  = Just convert './$opt_s' into './$opt_t' and exit
+		    (filenames can be overridden with -s and -t).
+	-h	  = Print this help and exit.
+	-i <file> = Filename of the DVD-ISO, default './$opt_i'.
+	-l <file> = File containing ISOs to download, default './$opt_l'.
+	-m <dir>  = Directory where to mount ISO-loop, default '$opt_m'.
+	-n	  = Do not download missing ISO files.
+	-r <dir>  = Root directory of unpack CD-ISOs, default './$opt_r'.
+	-s <file> = Filename for cfg-file, default '$opt_s' (case is ignored).
+	-t <file> = Filename for menu-file, default '$opt_t' (case is ignored).
+	-u	  = Do not unpack CD-ISOs.
+	-v	  = Print additional (debugging) information.\n";
+
+### Subroutine declarations: ###
+sub guess_file_path($$);
+sub unpack_initrd_gz($);
+sub edit_initrd_gz($\@\@);
+sub pack_initrd_gz($$);
+sub debian_initrd_hack($$);
+sub casper_initrd_hack($$);
+sub create_menu_file($$);
+sub parse_iso_file($\@);
+sub create_menus($\@);
+sub download_iso_file($$$);
+sub unpack_iso_file($$);
+sub convert_cfg_file($$);
+
+### main: ###
+{
+    # Command line and usage:
+    die $usage if not getopts('bc:d:ghi:l:m:nr:s:t:uv');
+    print $usage and exit if $opt_h;
+
+    # Debug functionality:
+    create_menu_file($opt_s,$opt_t) and exit if $opt_g;
+
+    # Read ISO-list
+    my @source = ({}); # Parse results
+    my $count = parse_iso_file($opt_l, @source);
+
+    # Create DL-directory
+    if (not -d $opt_d) {
+	mkdir $opt_d, 0755
+	    or die "*?? Could not create directory '$opt_d': $!\n";
+    }
+
+    # Create directory tree
+    mkpath(["$opt_r/boot/grub"], 0, 0755);
+    die "*?? Could not create directory '$opt_r/boot/grub'!\n"
+	if (not -d "$opt_r/boot/grub");
+
+    # Copy boot loader
+    if (not -e "$opt_r/boot/grub/stage2") {
+	my $grub = "grub/i386-pc/stage2_eltorito";
+	my $target = "$opt_r/boot/grub/stage2";
+	if (-e "/usr/lib/$grub") {
+	    copy("/usr/lib/$grub", $target)
+		or die "*** Could not copy file '/usr/lib/$grub': $!\n";
+	} elsif (-e "/usr/share/$grub") {
+	    copy("/usr/share/$grub", $target)
+		or die "*** Could not copy file '/usr/share/$grub': $!\n";
+	} elsif (-e "/lib/$grub") {
+	    copy("/lib/$grub", $target)
+		or die "*** Could not copy file '/lib/$grub': $!\n";
+	} else {
+	    die "*** Could not find file '$grub' in the system!\n";
+	}
+    }
+
+    # Create main menu:
+    create_menus($count, @source);
+
+    # Create image:
+    if ($opt_b) {
+	print "Skipping ISO creation as directed by the command line.\n";
+    } else {
+	mkisofs("-o $opt_i -b boot/grub/stage2 -c boot/boot.cat",
+		"-jcharset utf-8 -r -T -nobak -q",
+		"-no-emul-boot -boot-load-size 4 -boot-info-table",
+		"$opt_r");
+    }
+
+    # Chown files if needed:
+    if ($< == 0 and $opt_c) {
+	print "Fixing all files to be owned by '$opt_c'.\n";
+	my($user, $group) = (getpwnam($opt_c))[2,3];
+	chown $user, $group, $opt_i;
+	# Homemade 'chown -r':
+	my @files = ();
+	sub find_cmd { push @files, $File::Find::name; }
+	find(\&find_cmd, $opt_r);
+	foreach (@files) {
+		chown $user, $group, $_;
+		# Fix also directory permissions
+		if (-d $_) {
+			chmod 0755, $_;
+		}
+	}
+    }
+
+    exit 0;
+}
+
+### Subroutines: ###
+
+# Try to guess the correct path to file:
+sub guess_file_path($$) {
+    my $rel_path = shift;
+    my $cfg_path = shift;
+
+    my @path = split /\//, $cfg_path;
+    pop @path; # remove cfg filename
+
+    return $rel_path if not scalar(@path);
+    my $true_root = shift @path;
+    if ($true_root ne $opt_r) {
+	print STDERR "*? '$true_root' != '$opt_r', cfg-file '$cfg_path'\n";
+	$true_root = $opt_r;
+    }
+
+    return $rel_path if not scalar(@path);
+    my $fake_root = shift @path;
+
+    # Check for leading backslash:
+    if (substr($rel_path,0,1) eq '/') {
+	return "/$fake_root$rel_path"
+	    if -e "$true_root/$fake_root$rel_path";
+	# No luck, so remove it:
+	$rel_path = substr($rel_path,1);
+    }
+
+    # Low-hanging fruit:
+    return "/$fake_root/$rel_path"
+	if -e "$true_root/$fake_root/$rel_path";
+
+    # Check for KNOPPIX and derivates:
+    my $uc_path = uc($rel_path);
+    return "/$fake_root/$uc_path"
+	if -e "$true_root/$fake_root/$rel_path";
+
+    # Build full path:
+    my $boot_path = "";
+    if (scalar(@path)) {
+	$boot_path = $path[0];
+	if ($#path) {
+	    $boot_path = join '/', @path;
+	}
+    }
+
+    return "/$fake_root/$boot_path/$rel_path"
+	if -e "$true_root/$fake_root/$boot_path/$rel_path";
+
+    # Last hope:
+    $uc_path = uc($boot_path) . "/$uc_path";
+    return "/$fake_root/$uc_path"
+	if -e "$true_root/$fake_root/$uc_path";
+
+    # Give up:
+    return $rel_path;
+}
+
+# Unpack initrd.gz into safe tmp-directory:
+sub unpack_initrd_gz($) {
+    my $initrd_gz = shift;
+    my $home_dir = cwd();
+    my $temp_dir = mktemp("-d");
+    chomp $temp_dir; # remove trailing newline
+    mkdir "$temp_dir/root";
+    chdir "$temp_dir/root";
+
+    gzip("-d", "-c",$initrd_gz,"> ../initrd");
+    cpio("-t","--quiet","< ../initrd > ../files"); # for repacking
+    cpio("-i","-m","--quiet","-I","../initrd");
+    rename "../initrd", "../initrd.old"; # helps debugging
+
+    chdir $home_dir;
+    return $temp_dir; # unpacked tree in '$temp_dir/root'
+}
+
+# Pack new initrd.gz, install it and clean up:
+sub pack_initrd_gz($$) {
+    my $temp_dir = shift;
+    my $initrd_gz = shift;
+    my $home_dir = cwd();
+
+    chdir "$temp_dir/root";
+    cpio("-o","-O","../initrd","--quiet","--format=newc","< ../files");
+    chdir $temp_dir;
+    gzip("initrd");
+
+    if ($opt_c) {
+	my($user, $group) = (getpwnam($opt_c))[2,3];
+	chown $user, $group, "initrd.gz";
+    }
+
+    unlink $initrd_gz;              # rename() does not work over
+    copy "initrd.gz", "$initrd_gz"; # different filesystems
+
+    chdir $home_dir;
+    rm("-rf",$temp_dir); # unlink() can't be used recursively
+}
+
+# Edit files in initrd-tree:
+sub edit_initrd_gz($\@\@) {
+    my $temp_dir = shift;
+    my $targets = shift;
+    my $changes = shift;
+    my $home_dir = cwd();
+
+    chdir "$temp_dir/root";
+
+    while (my $target = shift @$targets) {
+	open TARGET, $target
+	    or die "*?? Could not open file '$temp_dir/root/$target'\n";
+	open FIXED, "> ../fixed"
+	    or die "*?? Could not open file '$temp_dir/fixed'\n";
+	print "Patching '$target'\n" if $opt_v;
+	while (<TARGET>) {
+	    for (my $i = 0; $i < $#$changes; $i += 2) { 
+		s/$$changes[$i]/$$changes[$i+1]/g;
+	    }
+	    print FIXED;
+	}
+	close TARGET;
+	close FIXED;
+	unlink $target;
+	chmod 0755, "../fixed";
+	rename "../fixed", $target;
+    }
+
+    chdir $home_dir;
+}
+
+# Hack Debian initrd scripts:
+sub debian_initrd_hack($$) {
+    my $distro_name = shift;
+    my $initrd_gz = shift;
+    my $home_dir = cwd();
+    $initrd_gz = "$home_dir/$opt_r/$initrd_gz";
+    my $temp_dir = unpack_initrd_gz($initrd_gz);
+
+    my @targets = ( "var/lib/dpkg/info/cdrom-detect.postinst" );
+    my @changes = (
+	"/cdrom/\.disk" => "/cdrom/$distro_name/\.disk",
+	"/cdrom/pool"   => "/cdrom/$distro_name/pool",
+	"/cdrom/dists"  => "/cdrom/$distro_name/dists",
+    );
+    edit_initrd_gz($temp_dir,@targets,@changes);
+
+    @targets = ( "usr/lib/debian-installer/retriever/cdrom-retriever" );
+    @changes = (
+	"CDMNT=/cdrom(?!/$distro_name)" => "CDMNT=/cdrom/$distro_name"
+    );
+    edit_initrd_gz($temp_dir,@targets,@changes);
+
+    pack_initrd_gz($temp_dir,$initrd_gz);
+}
+
+# Hack casper-based initrd scripts:
+sub casper_initrd_hack($$) {
+    my $distro_name = shift;
+    my $initrd_gz = shift;
+    my $home_dir = cwd();
+    $initrd_gz = "$home_dir/$opt_r/$initrd_gz";
+    my $temp_dir = unpack_initrd_gz($initrd_gz);
+
+    my @targets = ( "scripts/casper" );
+    my @changes = (
+	"path/casper" => "path/$distro_name/casper",
+	"directory/casper" => "directory/$distro_name/casper",
+	"/casper/\\\$" => "/$distro_name/casper/\$",
+    );
+    edit_initrd_gz($temp_dir,@targets,@changes);
+
+    pack_initrd_gz($temp_dir,$initrd_gz);
+}
+
+# Create menu-file from cfg-file:
+sub create_menu_file($$) {
+    # Parameters:
+    my $cfg_file = shift;
+    my $distro_name = shift;
+    my $menu_file = "$opt_r/boot/$distro_name/$opt_t";
+    $menu_file = $distro_name if $opt_g;
+
+    open IN, $cfg_file
+	or die "*?? Bad cfg-filename '$cfg_file'!\n";
+    open OUT, ">$menu_file"
+	or die "*?? Bad menu-filename '$menu_file'!\n";
+
+    print OUT "# Converted from '$cfg_file' by '$0'\n\n";
+    print OUT "# CONVERSION LOG:\n" if $opt_g;
+
+    # Output preamble:
+    my @preamble = ();
+    $preamble[0] = "color cyan/blue white/blue";
+    $preamble[1] = "foreground ffffff";
+    $preamble[2] = "background 2f5178\n";
+    $preamble[3] = "root (cd)";
+
+    my $line_nr = 0; # Current input line number
+    my $discarded = 0;
+
+    my $count = 0;
+    my @entry = ();
+    my $default = "auto";
+    my @kernel = ();
+    my @initrd = ();
+    my @append = ();
+    my @help = ();
+    my $localhd = "";
+    my $extra_help = 0;
+
+    # Read-loop:
+LINE: while (<IN>) {
+	$line_nr++;
+	s/^\s+//;   # Remove leading whitespace
+	s/\s\s+/ /; # Compress extra whitespace
+	s/\^//;     # Remove crap
+	next LINE if /^$/; # discard empty lines
+	next LINE if /^#/; # discard comments
+	next LINE if /^GFXBOOT/i; # Not supported
+
+	chomp; # Remove trailing newline
+	print OUT "# LINE $line_nr: '$_'\n" if $opt_g;
+
+	my @line = split; # Split line on whitespace
+	my $keyword = uc(shift @line); # Ignore case for simplicity
+
+	# Keyword APPEND:
+	if ($keyword eq "APPEND") {
+	    print OUT "#\tKeyword found: APPEND\n" if $opt_g;
+	    next LINE if $discarded;
+	  PARA: while (my $param = shift @line) {
+	      if ($param =~ /^initrd\=/i) {
+		  next PARA if ($' eq ""); #'
+		  $initrd[$count] = guess_file_path($',$cfg_file); #'
+		  print OUT "#\tNew initrd found: $initrd[$count]\n" if $opt_g;
+		  if (not $opt_g and $> == 0 # hacking requires root
+		      and -M "$opt_r/$initrd[$count]" > 1) { # Do only once
+		      debian_initrd_hack($distro_name,$initrd[$count])
+			  if $distro_name eq "debian";
+		      casper_initrd_hack($distro_name,$initrd[$count])
+			  if ($initrd[$count] =~ /casper/);
+		  }
+	      } elsif ($param =~ /^loop\=/i or $param =~ /^BOOT_IMAGE\=/i) {
+		  my $mpar = $&;
+		  my $mstr = guess_file_path($',$cfg_file); #'
+		  if (defined($append[$count])) {
+		      $append[$count] = "$append[$count] $mpar$mstr";
+		  } else {
+		      $append[$count] = "$mpar$mstr";
+		  }
+		  # Fix for Knoppix and friends:
+		  if ($param =~ /^BOOT_IMAGE\=/i) {
+		      my $kv = $'; #'
+		      $append[$count] = "$append[$count] $kv"."_dir=$mstr";
+		  }
+		  # Fix for SystemRescue:
+		  if (($param =~ /^loop\=/i) and not $opt_g) {
+		      $append[$count] = "$append[$count] subdir=/$distro_name";
+		  }
+	      } else {
+		  if (defined($append[$count])) {
+		      $append[$count] = "$append[$count] $param";
+		  } else {
+		      $append[$count] = $param;
+		  }
+	      }
+	  }
+	  print OUT "#\tAppend parameters: $append[$count]\n" if $opt_g;
+	  next LINE;
+	}
+
+	# Keyword DEFAULT:
+	if ($keyword eq "DEFAULT") {
+		$preamble[$#preamble+1] = "default 0";
+		next LINE if ($line[0] eq "auto");
+		$default = $line[0];
+		$entry[0] = "default";
+		$kernel[0] = guess_file_path($line[0],$cfg_file);
+		if ($opt_g) {
+		    print OUT "#\tKeyword found: DEFAULT\n";
+		    print OUT "#\tNew kernel found: $kernel[0]\n";
+		    print OUT "#\tDefault boot entry: $default\n";
+		}
+		next LINE;
+	}
+
+	# Function keys (F1 etc.):
+	if (/^F/i) {
+	    print OUT "#\tFunction key found: $keyword\n" if $opt_g;
+	    $extra_help = 1 if not $extra_help;
+	    my $num = substr($keyword,1,1);
+	    $num = 10 if not $num;
+	    $help[$num] = guess_file_path($line[0],$cfg_file);
+	    print OUT "#\tAdded help file: $help[$num]\n" if $opt_g;
+	    next LINE;
+	}
+
+	# Keyword KERNEL:
+	if ($keyword eq "KERNEL") {
+	    $kernel[$count] = guess_file_path($line[0],$cfg_file);
+	    if ($opt_g) {
+		print OUT "#\tKeyword found: KERNEL\n";
+		print OUT "#\tNew kernel found: $kernel[$count]\n";
+	    }
+	    next LINE;
+	}		
+
+	# Keyword LABEL:
+	if ($keyword eq "LABEL") {
+		$discarded = 0;
+		if ($default eq $line[0] or $line[0] eq "linux") {
+			$entry[0] = $line[0];
+		} else {
+			$entry[++$count] = $line[0];
+		}
+		if ($opt_g) {
+		    print OUT "#\tKeyword found: LABEL\n";		
+		    print OUT "#\tNew boot entry: $line[0]\n";
+		}
+		next LINE;
+	}
+
+	# Keyword LOCALBOOT:
+	if ($keyword eq "LOCALBOOT") {
+	    print OUT "#\tKeyword found: LOCALBOOT\n" if $opt_g;
+	    $discarded = 1;
+	    $entry[$count] = "";
+	    $count-- if $count;
+	    if ($line[0] eq "0x80") {
+		$localhd = "hd0,0";
+		print OUT "#\tAdded local boot disk: (hd0,0)\n";
+	    }
+	    next LINE;
+	}
+
+	# Keyword MENU:
+	if ($keyword eq "MENU") {
+		print OUT "#\tKeyword found: MENU\n" if $opt_g;
+		$keyword = uc(shift @line);
+		# Only parameter LABEL supported:
+		if ($keyword eq "LABEL") {
+		    print OUT "#\tKeyword found: LABEL\n" if $opt_g;
+		    $entry[$count] = join ' ', @line;
+		}
+		next LINE;
+	}
+
+	# Ignored keywords:
+	print OUT "#\tUnrecognized or ignored keyword: $keyword\n" if $opt_g;
+	next LINE if $keyword eq "PROMPT";
+	next LINE if $keyword eq "DISPLAY";
+	next LINE if $keyword eq "TIMEOUT";
+	next LINE if $keyword eq "ONTIMEOUT";
+	next LINE if $keyword eq "IMPLICIT";
+	next LINE if $keyword eq "SAY";
+
+	print OUT "#\tBad input line: $_\n" if $opt_g;
+	print STDERR "*? Unrecognized keyword in '$cfg_file' line $line_nr: $keyword\n";
+    }
+
+    close(IN);
+    print OUT "# END OF CONVERSION: SUCCESS\n\n" if $opt_g;
+
+    # Print preamble:
+    my $cnt = 0;
+    print OUT "$preamble[$cnt++]\n" while ($cnt <= $#preamble);
+
+    if (not defined($kernel[0])) {
+	$kernel[0] = "linux"; # syslinux default value
+    }
+
+    if (not defined($append[0])) {
+	$append[0] = " ";
+    }
+
+    LOOP: for (my $i = 0; $i <= $count; $i++) {
+	next LOOP if (not defined($entry[$i]));
+	print OUT "\ntitle $entry[$i]\n";
+	if (not defined($kernel[$i])) {
+	    $kernel[$i] = $kernel[0];
+	}
+	if (not defined($append[$i])) {
+	    $append[$i] = $append[0];
+	}
+	if (not defined($initrd[$i])) {
+	    $initrd[$i] = $initrd[0];
+	}
+	if (-e "$opt_r$kernel[$i]") {
+	    print OUT "\tkernel $kernel[$i] $append[$i]\n";
+	    if (-e "$opt_r$initrd[$i]") {
+		print OUT "\tinitrd $initrd[$i]\n";
+	    } else {
+		print STDERR "*?? Bad initrd path '$initrd[$i]', ignored.\n";
+	    }
+	} else {
+	    print STDERR "*?? Bad kernel path '$kernel[$i]', ignored.\n";
+	}
+    }
+
+    if ($extra_help) {
+	print OUT "\ntitle Help\n";
+	for (my $i = 1; $i < 10; $i++) {
+	    if (defined($help[$i])) {
+		print OUT "\tcat $help[$i]\n";
+		print OUT "\tpause Press any key to continue ...\n";
+	    }
+	}
+    }
+
+    if ($localhd) {
+	print OUT "\ntitle Local boot\n";
+	print OUT "\troot($localhd)\n";
+	print OUT "\tconfigfile /boot/grub/menu.lst\n";
+    }
+
+    print OUT "\ntitle Go back to main menu\n";
+    print OUT "\tconfigfile /boot/grub/menu.lst\n";
+
+    close(OUT);
+    return $line_nr;
+}
+
+# Read and parse ISO-list file:
+sub parse_iso_file($\@) {
+    my $iso_file = shift;
+    my $data = shift;
+    open LIST, $iso_file or die "*?? Could not open file '$iso_file'!\n";
+
+    my $lno = 0;
+    my $cnt = 0;
+
+  LINE: while (<LIST>) {
+      $lno++;
+      chomp; # remove trailing newline
+      s/^\s+//; # Remove leading whitespace
+      s/\s\s+/ /; # Compress extra whitespace
+      next LINE if /^$/; # discard empty lines
+      next LINE if /^#/; # discard comments
+    
+      if (/^\[(\w.+)\]\s*$/) {
+	  $$data[$cnt++]{name} = $1;
+	  next LINE;
+      }
+
+      if (/^http/ or /^ftp/ or /^local/) {
+	  $$data[$cnt-1]{method} = $&;
+	  my @path = split /\//, (substr $_, length($&)+3);
+	  $$data[$cnt-1]{file} = pop @path;
+	  $$data[$cnt-1]{host} = shift @path;
+	  $$data[$cnt-1]{path} = join '/', @path;
+	  next LINE;
+      }
+
+      print STDERR "*?! Unrecognized line $lno:\t'$_'";
+      print STDERR "while reading file '$opt_l'\n";
+    }
+    return $cnt;
+}
+
+sub create_menus($\@) {
+    my $menu_file = "$opt_r/boot/grub/menu.lst";
+    open MENU, ">$menu_file"
+	or die "*?? Could not open file '$menu_file': $!\n";
+
+    print MENU "color cyan/blue white/blue\n";
+    print MENU "foreground ffffff\n";
+    print MENU "background 2f5178\n\n";
+    print MENU "splashimage /boot/grub/menu.xpm.gz\n";
+    print MENU "root (cd)\n";
+    print MENU "default 0\n";
+    print MENU "timeout 15\n\n";
+    print MENU "title Local boot menu\n";
+    print MENU "\tconfigfile (hd0,0)/boot/grub/menu.lst\n\n";
+
+    my $cnt = shift;
+    my $data = shift;
+
+    for (my $i = 0; $i < $cnt; $i++) {
+
+	my @name = split " ", $$data[$i]{name};
+	print MENU "title ", join(' ', @name), "\n";
+
+	my $distro_name = lc(shift(@name));
+	if (not -d "$opt_r/boot/$distro_name") {
+	    mkdir "$opt_r/boot/$distro_name", 0755
+		or die "*?? Could not create directory '$opt_r/boot/$distro_name': $!\n";
+	}
+
+	my $distro_dir = "$opt_r/$distro_name";
+	if (not -d $distro_dir) {
+	    mkdir "$distro_dir", 0755
+		or die "*?? Could not create directory '$distro_dir': $!\n";
+	}
+
+	print MENU "\tconfigfile /boot/$distro_name/menu.lst\n\n";
+
+	print "*** Processing '$$data[$i]{name}':\n";
+	download_iso_file($$data[$i]{file}, $$data[$i]{method},
+			  "$$data[$i]{host}/$$data[$i]{path}");
+	unpack_iso_file($distro_dir, "$opt_d/$$data[$i]{file}");
+	copy("menu.xpm.gz","$opt_r/boot/grub");
+	convert_cfg_file($distro_dir, $distro_name);
+    }
+}
+
+sub download_iso_file($$$) {
+    my $file = shift;
+    my $method = shift;
+    my $host_path = shift;
+
+    if ($opt_n) {
+	print "*!! Skipping download of '$opt_d/$file' as requested.\n";
+    } elsif (-e "$opt_d/$file") {
+	print "*!? File '$opt_d/$file' exists, skipping download.\n";
+    } else {
+	my $dir = cwd();
+	chdir($opt_d);
+	my $url = "/$host_path/$file";
+	if ($method eq "ftp") {
+	    print "*!! Downloading 'ftp:/$url'\n";
+	    wget("ftp:/$url");
+	}
+	if ($method eq "http") {
+	    print "*!! Downloading 'http:/$url'\n";
+	    wget("http:/$url");
+	}
+	if ($method eq "local") {
+	    print "*!! Copying '$file'\n";
+	    copy("$url",".");
+	}
+	chdir($dir);
+    }
+}
+
+sub unpack_iso_file($$) {
+    my $distro_dir = shift;
+    my $iso_file = shift;
+
+    if ($opt_u) {
+	print "*!! Skipping unpack of '$iso_file' as requested.\n";
+    } elsif ($> != 0) {
+	print "*?! Not running as root, skipping unpack of '$iso_file'.\n";
+    } else {
+	print "*!! Mounting and unpacking '$iso_file'.\n";
+	mount("-o loop $iso_file $opt_m"); # Needs root-priviledges!
+	`( cd $opt_m ; tar cf - . ) | ( cd $distro_dir; tar xfvp - )`;
+	umount($opt_m);
+	if ($opt_v) {
+	    print "*!! Unmounted '$iso_file', pausing for 3 seconds.\n";
+	    sleep 3;
+	}
+    }
+}
+
+sub convert_cfg_file($$) {
+    my $distro_dir = shift;
+    my $distro_name = shift;
+    my $input_file = "";
+
+    # Search for cfg-file:
+    $input_file = "$distro_dir/$opt_s"
+	if -e "$distro_dir/$opt_s";
+    $input_file = "$distro_dir/isolinux/$opt_s"
+	if -e "$distro_dir/isolinux/$opt_s";
+    $input_file = "$distro_dir/boot/isolinux/$opt_s"
+	if -e "$distro_dir/boot/isolinux/$opt_s";
+    $input_file = "$distro_dir/boot/i386/loader/$opt_s"
+	if -e "$distro_dir/boot/i386/loader/$opt_s";
+
+    if ($input_file) {
+	my $lines_read = create_menu_file($input_file, $distro_name);
+	if ($opt_v) {
+	    print "*!! File '$input_file' found: $lines_read lines.\n";
+	    print "*!! File '$opt_r/boot/$distro_name/$opt_t' created.\n"
+		if $lines_read;
+	}
+    }
+}
+
+# EOF

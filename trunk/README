@@ -1,0 +1,54 @@
+README file for make_dvd.pl and cfg_menu.pl.
+(C) Mika Kukkonen, licensed under GPLv2.
+
+I got the original idea for these scripts from the article
+http://www.linux.com/print.pl?sid=06/03/16/1724219, which referenced
+now unavailable site/script at http://www.nautopia.net
+
+I did secure the copy of the "script" by using archived copies of
+the site, and while I liked the idea much, it consisted of distros
+that had little interest for me. Also it required the lot of manual
+work, as the main level "script" was just a wrapper for mkisofs(1).
+	
+So I first created a Perl script (Perl being my favourite scripting
+language) to convert ISOLINUX (http://syslinux.zytor.com/iso.php)
+isolinux.cfg files into GRUB (http://www.gnu.org/software/grub/)
+menu.lst files to help on this manual work. I named it cfg2menu.pl
+
+After doing that, I noticed that the rest of the work was also
+tedious, so I made another Perl scipt (make_dvd.pl) to do it for
+me ;-)
+
+Both scripts are far for beautiful or perfect, and especially
+cfg2menu.pl will very likely break with some weird isolinux.cfg
+files. See included iso.list configuration file for distributions
+it have been tested with.
+*** WARNING ***
+Check the generated menu.lst files before burning your DVD!! 
+Failure to do so may well result in wasted DVD-R disc!
+*** WARNING ***
+
+Feed '-h' to make_dvd.pl to get list of command line switches.
+If you just wish to experiment, there are three switches that
+can be used to skip phases:
+	-b will skip the actual DVD-ISO creation, i.e. call
+	   to mkisofs(1). Use this on first run, and check
+	   the menu.lst files!
+	-n will make the script ignore missing CD-ISO files,
+	   i.e. the script will not attempt to download anything.
+	   Reasons for use should be obvious. Note that once the
+	   CD-ISO has been downloaded, the script will detect it
+	   and skip the specific download.
+	-u will skip the unpacking of CD-ISOs into DVD-root. Use
+	   it after first run, as there is no point in re-unpacking
+	   after the first time. Note that unpacking requires running
+	   make_dvd.pl as root (NOTE!), and the script will detect
+	   that and will not unpack anything if not run with root
+	   priviledges. This is because 'mount -o loop' requires
+	   root priviledges.
+
+That's it for now, I will be happy to accept _useful_ patches to both
+scripts; the license is GPLv2 obviously.
+
+--MiKu (mikukkon@iki.fi)
+

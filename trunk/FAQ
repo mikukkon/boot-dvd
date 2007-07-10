@@ -1,0 +1,6 @@
+Q) Ugh, I entered two flags, first one requiring a parameter and now I have a
+   file with name of "-b"... Why that happened and how do I delete it?
+A) I use the 'Getopt::Std' package that is shipped with Perl for command line
+   parsing, and it unfortunately does not prevent this from happening (actually,
+   it seems to consider it to be a feature...). To delete the troublesome file,
+   use a graphical tool or add some path prefix, i.e. "rm ./-b" should work.
