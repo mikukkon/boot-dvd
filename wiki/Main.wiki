@@ -1,0 +1,10 @@
+#summary Main page for make_boot_dvd project.
+#labels Featured,Phase-Requirements
+
+= Introduction =
+
+Scratching the itch.
+
+= Details =
+
+TBD.
