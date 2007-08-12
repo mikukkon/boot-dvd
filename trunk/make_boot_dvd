@@ -2,7 +2,7 @@
 use strict; # Bring it on!
 
 # Yeah, this is really a shell script, but I like Perl ;-)
-use Shell qw(cpio gzip mkisofs mktemp mount rm umount wget);
+use Shell qw(cpio du gzip genisoimage mktemp mount tar rm umount wget);
 
 # Some standard library routines:
 use Cwd;
@@ -12,7 +12,7 @@ use File::Find;
 
 # Command line options:
 use Getopt::Std;
-use vars qw($opt_b $opt_c $opt_d $opt_g $opt_h $opt_i $opt_l
+use vars qw($opt_a $opt_b $opt_c $opt_d $opt_g $opt_h $opt_i $opt_l
 	    $opt_m $opt_n $opt_r $opt_s $opt_t $opt_u $opt_v);
 
 # Command line defaults, change these to your liking:
@@ -26,6 +26,7 @@ $opt_t = "menu.lst";
 
 # Command line usage text:
 my $usage = "Usage:  '$0' with following optional arguments:
+	-a <file> = Unpack '<file>.tar.gz' into DVD root (see -r)
 	-b	  = Do not create the DVD-ISO image.
 	-c <user> = Do chown() <user> for all files if running as root.
 	-d <dir>  = Directory to download ISOs to, default './$opt_d'.
@@ -59,7 +60,7 @@ sub convert_cfg_file($$);
 ### main: ###
 {
     # Command line and usage:
-    die $usage if not getopts('bc:d:ghi:l:m:nr:s:t:uv');
+    die $usage if not getopts('a:bc:d:ghi:l:m:nr:s:t:uv');
     print $usage and exit if $opt_h;
 
     # Debug functionality:
@@ -101,14 +102,31 @@ sub convert_cfg_file($$);
     # Create main menu:
     create_menus($count, @source);
 
+    if (not $opt_u) {
+	# Print some information:
+	print "*** Ready to create DVD ISO-image '$opt_i': ";
+	print du("-sh","$opt_r");
+
+	# Check for customization:
+	if ($opt_a and -f "$opt_a.tar.gz") {
+	    print "*!! Unpacking custom file '$opt_a.tar.gz'..."; 
+	    gzip("-d -c $opt_a.tar.gz > $opt_r/$opt_a.tar");
+	    print "gzip..." if $opt_v;
+	    tar("xop -C $opt_r -f $opt_r/$opt_a.tar");
+	    print "tar..." if $opt_v;
+	    unlink("$opt_r/$opt_a.tar");
+	    print "done!\n";
+	}
+    }
+
     # Create image:
     if ($opt_b) {
-	print "Skipping ISO creation as directed by the command line.\n";
+	print "*!! Skipping ISO creation as directed by the command line.\n";
     } else {
-	mkisofs("-o $opt_i -b boot/grub/stage2 -c boot/boot.cat",
-		"-jcharset utf-8 -r -T -nobak -q",
-		"-no-emul-boot -boot-load-size 4 -boot-info-table",
-		"$opt_r");
+	genisoimage("-o $opt_i -b boot/grub/stage2 -c boot/boot.cat",
+		    "-jcharset utf-8 -r -T -q",
+		    "-no-emul-boot -boot-load-size 4 -boot-info-table",
+		    "$opt_r");
     }
 
     # Chown files if needed:
@@ -245,7 +263,7 @@ sub edit_initrd_gz($\@\@) {
 	    or die "*?? Could not open file '$temp_dir/root/$target'\n";
 	open FIXED, "> ../fixed"
 	    or die "*?? Could not open file '$temp_dir/fixed'\n";
-	print "Patching '$target'\n" if $opt_v;
+	print "*!? Patching '$target'\n" if $opt_v;
 	while (<TARGET>) {
 	    for (my $i = 0; $i < $#$changes; $i += 2) { 
 		s/$$changes[$i]/$$changes[$i+1]/g;
@@ -269,6 +287,8 @@ sub debian_initrd_hack($$) {
     my $home_dir = cwd();
     $initrd_gz = "$home_dir/$opt_r/$initrd_gz";
     my $temp_dir = unpack_initrd_gz($initrd_gz);
+
+    print "*!? Doing Debian initrd hack to '$initrd_gz':\n" if $opt_v;
 
     my @targets = ( "var/lib/dpkg/info/cdrom-detect.postinst" );
     my @changes = (
@@ -368,7 +388,7 @@ LINE: while (<IN>) {
 		  $initrd[$count] = guess_file_path($',$cfg_file); #'
 		  print OUT "#\tNew initrd found: $initrd[$count]\n" if $opt_g;
 		  if (not $opt_g and $> == 0 # hacking requires root
-		      and -M "$opt_r/$initrd[$count]" > 1) { # Do only once
+		      and -M "$opt_r/$initrd[$count]" > .1) { # Do only once
 		      debian_initrd_hack($distro_name,$initrd[$count])
 			  if $distro_name eq "debian";
 		      casper_initrd_hack($distro_name,$initrd[$count])

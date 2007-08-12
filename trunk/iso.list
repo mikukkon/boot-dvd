@@ -1,55 +1,40 @@
-[Archlinux (2007.05 Duke FTP i686)]
-ftp://ftp.nluug.nl/pub/metalab/distributions/archlinux/iso/2007.05/i686/Archlinux-i686-2007.05-Duke.ftp.iso
+[Archlinux (2007.08 Don't Panic FTP i686)]
+ftp://ftp.nluug.nl/pub/metalab/distributions/archlinux/iso/2007.08/i686/Archlinux-i686-2007.08-Don't-Panic.ftp.iso
 
-[Debian (4.0r0 businesscard i386)]
-ftp://ftp.funet.fi/pub/linux/mirrors/debian-cdimage/current/i386/iso-cd/debian-40r0-i386-businesscard.iso
+[Debian (Testing daily businesscard i386)]
+http://cdimage.debian.org/cdimage/daily-builds/daily/arch-latest/i386/iso-cd/debian-testing-i386-businesscard.iso
 
 [Deli (0.7.2)]
 ftp://ftp.berlios.de/pub/delilinux/iso/deli-0.7.2.iso
 
-[DSL (3.4)]
-ftp://ftp.belnet.be/packages/damnsmalllinux/current/dsl-3.4.iso
+#[DSL (3.4)]
+#ftp://ftp.belnet.be/packages/damnsmalllinux/current/dsl-3.4.iso
 
-[DSL-N (01RC4)]
-ftp://ibiblio.org/pub/Linux/distributions/damnsmall/dsl-n/current/dsl-n-01RC4.iso
-
-[Fedora Core (7 rescue i386)]
-ftp://ftp.funet.fi/pub/mirrors/fedora.redhat.com/pub/fedora/linux/releases/7/Fedora/i386/iso/F-7-i386-rescuecd.iso
+[Fedora Core (Development boot i386)]
+ftp://ftp.funet.fi/pub/mirrors/fedora.redhat.com/pub/fedora/linux/development/i386/os/images/boot.iso
 
 [Firmwarekit (R2)]
 http://www.linuxfirmwarekit.org/download/firmwarekit-r2.iso
 
-[Foresight (2.18.1 Live-CD)]
-http://www.foresightlinux.org/sitemedia/downloads/media/foresight-2.18.1-x86.iso
-
-[Geexbox (1.1 en i386)]
-ftp://ftp.proxad.net/pub/Distributions_Linux/GeeXboX/releases/1.1/geexbox-1.1-en.i386.iso
-
 [Gentoo (2007.0-r1 minimal)]
 ftp://trumpetti.atm.tut.fi/gentoo/releases/x86/current/installcd/install-x86-minimal-2007.0-r1.iso
 
-[INSERT (1.3.9b_en)]
-http://kent.dl.sourceforge.net/sourceforge/insert/INSERT-1.3.9b_en.iso
-
-[IPCop install-i386 1.4.15]
-http://kent.dl.sourceforge.net/sourceforge/ipcop/ipcop-1.4.15-install-cd.i386.iso
-
-[Knoppix (V5.1 CD 07-01-04-EN)]
-http://ftp.surfnet.nl/ftp/knoppix/KNOPPIX_V5.1.1CD-2007-01-04-EN.iso
-
-[Kubuntu (7.04 desktop)]
-http://releases.ubuntu.com/kubuntu/7.04/kubuntu-7.04-desktop-i386.iso
-
-[OpenSUSE (10.2-GM)]
-ftp://ftp.funet.fi/pub/mirrors/ftp.opensuse.com/pub/opensuse/distribution/10.2/iso/cd/openSUSE-10.2-GM-i386-mini.iso
-
-[Puppy-Linux (2.16.1 SeaMonkey/full-drivers)]
-ftp://ibiblio.org/pub/linux/distributions/puppylinux/puppy-2.16.1-seamonkey-fulldrivers.iso
-
-[SourceMage (0.9.6.3)]
+#[IPCop install-i386 1.4.16]
+#http://kent.dl.sourceforge.net/sourceforge/ipcop/ipcop-1.4.16-install-cd.i386.iso
+#
+#[Knoppix (V5.1 CD 07-01-04-EN)]
+#http://ftp.surfnet.nl/ftp/knoppix/KNOPPIX_V5.1.1CD-2007-01-04-EN.iso
+#
+#[Kubuntu (7.04 desktop)]
+#http://releases.ubuntu.com/kubuntu/7.04/kubuntu-7.04-desktop-i386.iso
+#
+#[Puppy-Linux (2.17 SeaMonkey/full-drivers)]
+#ftp://ibiblio.org/pub/linux/distributions/puppylinux/puppy-2.17-seamonkey-fulldrivers.iso
+#
+#[SourceMage (0.9.6.3)]
 #http://dbg.download.sourcemage.org/iso/x86/0.9.6/smgl-0.9.6.3-x86.iso.bz2
-local://opt/iso/smgl-0.9.6.3-x86.iso
+#local://opt/iso/smgl-0.9.6.3-x86.iso
 
-[SystemRescue (0.3.6)]
-http://www.mirrorservice.org/sites/download.sourceforge.net/pub/sourceforge/s/sy/systemrescuecd/systemrescuecd-x86-0.3.6.iso
+[SystemRescue (0.3.7)]
+http://kent.dl.sourceforge.net/sourceforge/systemrescuecd/systemrescuecd-x86-0.3.7.iso
 
