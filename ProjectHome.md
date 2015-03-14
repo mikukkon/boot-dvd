@@ -1,0 +1,1 @@
+Couple Perl-scripts that can be used to create a custom DVD-ISO image (to be burned), that contains user selected Linux boot/live-CD images (only ISOLINUX boot loader supported) in a handy GRUB menu.
